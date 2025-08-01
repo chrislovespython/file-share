@@ -247,13 +247,14 @@ const FileTransferApp: React.FC = () => {
       <div className="w-full max-w-3xl space-y-6">
         <div className="text-center">
           <h1 className="text-6xl font-bold">🚀 QuickShare</h1>
-          <p className="text-lg text-base-content/70 mt-4">Secure expiring file links. Send. Receive. Done.</p>
+          <p className="text-lg text-base-content/70 mt-4">Quick Expiring file links. Send. Receive. Done.</p>
         </div>
 
         <div role="tablist" className="tabs tabs-boxed justify-center">
           <button role="tab" className={`tab ${activeTab === 'upload' ? 'tab-active' : ''}`} onClick={() => setActiveTab('upload')}>Upload</button>
           <button role="tab" className={`tab ${activeTab === 'download' ? 'tab-active' : ''}`} onClick={() => setActiveTab('download')}>Download</button>
         </div>
+        <p className="text-center text-xs text-base-content/50">Made For Testing Purposes Only. Be Careful Of What You Upload On The Internet. Nobody is actually safe in the Internet.</p>
 
         {error && <div className="alert alert-error"><AlertCircle className="h-5 w-5" /> {error}</div>}
         {success && <div className="alert alert-success"><CheckCircle className="h-5 w-5" /> {success}</div>}

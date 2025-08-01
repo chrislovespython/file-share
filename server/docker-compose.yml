@@ -6,8 +6,8 @@ services:
     ports:
       - "8000:8000"
     image: trayden/quickshare-backend:latest
-    environment:
-      - PYTHONUNBUFFERED=1
+    env_file:
+      - .env
     volumes:
       - ./uploads:/app/uploads
     restart: unless-stopped

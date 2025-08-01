@@ -10,17 +10,24 @@ import asyncio
 from datetime import datetime, timedelta
 import aiofiles
 import hashlib
-from typing import Dict, Optional
+from typing import Dict
 import logging
 from collections import defaultdict
-import urllib.parse
+from dotenv import load_dotenv
 
-# Configure logging
+# --- Load environment variables ---
+load_dotenv()
+SECRET_KEY = os.getenv("SECRET_KEY")
+if not SECRET_KEY:
+    raise RuntimeError("SECRET_KEY is not set")
+RATE_LIMIT = int(os.getenv("RATE_LIMIT", "5"))
+
+# --- Logging ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="File Transfer API", version="1.1.0")
-
+# --- App config ---
+app = FastAPI(title="File Transfer API", version="1.2.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -33,13 +40,14 @@ UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 file_storage: Dict[str, dict] = {}
+user_rate_limit: Dict[str, list] = defaultdict(list)  # API key → [timestamps]
+ip_rate_limit: Dict[str, list] = defaultdict(list)    # IP address → [timestamps]
 
 MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB
-EXPIRY_TIME = 60  # 1 minute
-CODE_LENGTH = 6
-RATE_LIMIT = 20  # max 20 req/minute
-rate_limit_data = defaultdict(list)  # IP -> [timestamps]
+EXPIRY_TIME = 60  # in seconds
+CODE_LENGTH = 8
 
+# --- Models ---
 class FileDownloadRequest(BaseModel):
     code: str
 
@@ -48,10 +56,11 @@ class FileUploadResponse(BaseModel):
     expires_at: str
     file_size: int
 
+# --- Utilities ---
 def generate_code() -> str:
-    characters = string.ascii_uppercase + string.digits
-    characters = characters.replace('0', '').replace('O', '').replace('I', '').replace('1', '')
-    return ''.join(random.choice(characters) for _ in range(CODE_LENGTH))
+    chars = string.ascii_uppercase + string.digits
+    chars = chars.replace('0', '').replace('O', '').replace('I', '').replace('1', '')
+    return ''.join(random.choice(chars) for _ in range(CODE_LENGTH))
 
 def get_file_hash(file_path: str) -> str:
     hasher = hashlib.sha256()
@@ -61,19 +70,14 @@ def get_file_hash(file_path: str) -> str:
     return hasher.hexdigest()
 
 def sanitize_filename(filename: str) -> str:
-    """Sanitize filename for safe HTTP header usage"""
-    if not filename:
-        return "download"
-    # Remove or replace problematic characters
     safe_chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-() "
-    sanitized = ''.join(c if c in safe_chars else '_' for c in filename)
-    return sanitized.strip() or "download"
+    return ''.join(c if c in safe_chars else '_' for c in (filename or "download")).strip() or "download"
 
 async def cleanup_expired_files():
     while True:
         now = datetime.now()
-        expired_codes = [code for code, info in file_storage.items() if now > info['expires_at']]
-        for code in expired_codes:
+        expired = [code for code, info in file_storage.items() if now > info['expires_at']]
+        for code in expired:
             info = file_storage.pop(code, None)
             if info and os.path.exists(info['file_path']):
                 os.remove(info['file_path'])
@@ -84,33 +88,36 @@ async def cleanup_expired_files():
 async def startup_event():
     asyncio.create_task(cleanup_expired_files())
 
-def check_rate_limit(request: Request):
+# --- Auth + Rate limiting ---
+def check_user_rate_limit(request: Request):
+
     ip = request.client.host
     now = datetime.now()
-    rate_limit_data[ip] = [t for t in rate_limit_data[ip] if (now - t).seconds < 60]
-    if len(rate_limit_data[ip]) >= RATE_LIMIT:
-        raise HTTPException(status_code=429, detail="Too many requests")
-    rate_limit_data[ip].append(now)
 
+    # --- IP rate limit ---
+    ip_rate_limit[ip] = [t for t in ip_rate_limit[ip] if (now - t).seconds < 60]
+    if len(ip_rate_limit[ip]) >= RATE_LIMIT:
+        raise HTTPException(status_code=429, detail="Too many requests from this IP")
+    ip_rate_limit[ip].append(now)
+
+# --- Routes ---
 @app.post("/upload", response_model=FileUploadResponse)
 async def upload_file(request: Request, file: UploadFile = File(...)):
-    check_rate_limit(request)
+    check_user_rate_limit(request)
     try:
         content = await file.read()
         file_size = len(content)
-
         if file_size == 0:
             raise HTTPException(status_code=400, detail="Empty file not allowed")
         if file_size > MAX_FILE_SIZE:
-            raise HTTPException(status_code=413, detail=f"File too large. Max is {MAX_FILE_SIZE // 1024 // 1024}MB")
+            raise HTTPException(status_code=413, detail=f"Max size is {MAX_FILE_SIZE // 1024 // 1024}MB")
 
         code = generate_code()
         while code in file_storage:
             code = generate_code()
 
-        # Preserve original filename, use a fallback if None
-        original_filename = file.filename or "uploaded_file"
-        ext = os.path.splitext(original_filename)[1] if original_filename else ""
+        original_filename = file.filename or "file"
+        ext = os.path.splitext(original_filename)[1]
         unique_name = f"{uuid.uuid4()}{ext}"
         file_path = os.path.join(UPLOAD_DIR, unique_name)
 
@@ -130,30 +137,23 @@ async def upload_file(request: Request, file: UploadFile = File(...)):
             'upload_time': datetime.now()
         }
 
-        logger.info(f"Uploaded file: {original_filename} → {code}")
+        logger.info(f"Uploaded {original_filename} → {code}")
         return FileUploadResponse(code=code, expires_at=expires_at.isoformat(), file_size=file_size)
 
     except Exception as e:
         logger.error(f"Upload error: {e}")
         raise HTTPException(status_code=500, detail="Upload failed")
 
-def schedule_cleanup(code: str):
-    try:
-        info = file_storage.pop(code, None)
-        if info and os.path.exists(info['file_path']):
-            os.remove(info['file_path'])
-            logger.info(f"File {code} deleted after download")
-    except Exception as e:
-        logger.error(f"Cleanup error: {e}")
-
 @app.post("/download")
 async def download_file(request: FileDownloadRequest, background_tasks: BackgroundTasks):
-    code = request.code.upper().strip()
-    return await _handle_download(code, background_tasks)
+    check_user_rate_limit(request)
+
+    return await _handle_download(request.code.strip().upper(), background_tasks)
 
 @app.get("/download/{code}")
-async def direct_download(code: str, background_tasks: BackgroundTasks):
-    return await _handle_download(code.upper().strip(), background_tasks)
+async def direct_download(request: Request, code: str, background_tasks: BackgroundTasks):
+    check_user_rate_limit(request)
+    return await _handle_download(code.strip().upper(), background_tasks)
 
 async def _handle_download(code: str, background_tasks: BackgroundTasks):
     if code not in file_storage:
@@ -178,22 +178,28 @@ async def _handle_download(code: str, background_tasks: BackgroundTasks):
 
     background_tasks.add_task(schedule_cleanup, code)
 
-    # Sanitize the original filename for safe HTTP header usage
-    safe_filename = sanitize_filename(info['original_name'])
-    
-    logger.info(f"Downloading file: {code} → {safe_filename}")
-
     return FileResponse(
         path=info['file_path'],
-        filename=safe_filename,
+        filename=sanitize_filename(info['original_name']),
         media_type=info['content_type'] or 'application/octet-stream'
     )
 
+def schedule_cleanup(code: str):
+    try:
+        info = file_storage.pop(code, None)
+        if info and os.path.exists(info['file_path']):
+            os.remove(info['file_path'])
+            logger.info(f"File {code} deleted after download")
+    except Exception as e:
+        logger.error(f"Cleanup error: {e}")
+
 @app.get("/info/{code}")
-async def get_file_info(code: str):
-    code = code.upper().strip()
+async def get_file_info(request: Request, code: str):
+    check_user_rate_limit(request)
+    code = code.strip().upper()
     if code not in file_storage:
         raise HTTPException(status_code=404, detail="Invalid or expired code")
+
     info = file_storage[code]
     if datetime.now() > info['expires_at']:
         if os.path.exists(info['file_path']):
