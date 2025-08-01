@@ -246,8 +246,8 @@ const FileTransferApp: React.FC = () => {
     <div className="min-h-screen bg-base-100 text-base-content p-4 sm:p-6 md:p-8 flex items-center justify-center">
       <div className="w-full max-w-3xl space-y-6">
         <div className="text-center">
-          <h1 className="text-4xl font-bold">🚀 QuickShare</h1>
-          <p className="text-sm text-base-content/70">Secure expiring file links. Send. Receive. Done.</p>
+          <h1 className="text-6xl font-bold">🚀 QuickShare</h1>
+          <p className="text-lg text-base-content/70 mt-4">Secure expiring file links. Send. Receive. Done.</p>
         </div>
 
         <div role="tablist" className="tabs tabs-boxed justify-center">
