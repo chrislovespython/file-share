@@ -33,7 +33,7 @@ const FileTransferApp: React.FC = () => {
   const [showQRGenerator, setShowQRGenerator] = useState(false);
   const [qrCodeDataUrl, setQrCodeDataUrl] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const qrCodeRef = useRef<HTMLDivElement>(null);
+  //const qrCodeRef = useRef<HTMLDivElement>(null);
 
   const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 
