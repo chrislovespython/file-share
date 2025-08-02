@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { Upload, AlertCircle, CheckCircle, ClipboardCopy, QrCode } from 'lucide-react';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'https://quickshare-backend-latest.onrender.com';
@@ -30,7 +30,10 @@ const FileTransferApp: React.FC = () => {
   const [copied, setCopied] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [showQRScanner, setShowQRScanner] = useState(false);
+  const [showQRGenerator, setShowQRGenerator] = useState(false);
+  const [qrCodeDataUrl, setQrCodeDataUrl] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const qrCodeRef = useRef<HTMLDivElement>(null);
 
   const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 
@@ -68,6 +71,29 @@ const FileTransferApp: React.FC = () => {
     }
     
     return 'download';
+  };
+
+  const generateDownloadUrl = (code: string) => {
+    return `${window.location.origin}/download/${code}`;
+  };
+
+  const generateQRCode = async (text: string) => {
+    try {
+      // Dynamically import QR code library
+      const QRCode = await import('qrcode');
+      const url = await QRCode.toDataURL(text, {
+        width: 300,
+        margin: 2,
+        color: {
+          dark: '#000000',
+          light: '#ffffff'
+        }
+      });
+      setQrCodeDataUrl(url);
+    } catch (err) {
+      console.error('Failed to generate QR code:', err);
+      setError('Failed to generate QR code');
+    }
   };
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
@@ -238,7 +264,6 @@ const FileTransferApp: React.FC = () => {
 
   const handleQRScan = (result: string) => {
     if (result) {
-      // Extract code from URL if it's a full URL, or use the code directly
       const urlMatch = result.match(/\/download\/([A-Z0-9]+)/i);
       const code = urlMatch ? urlMatch[1] : result;
       
@@ -248,11 +273,17 @@ const FileTransferApp: React.FC = () => {
     }
   };
 
+  const handleShowQRGenerator = async () => {
+    if (uploadResult?.code) {
+      setShowQRGenerator(true);
+      await generateQRCode(generateDownloadUrl(uploadResult.code));
+    }
+  };
+
   const QRScanner = () => {
     const qrRef = useRef<HTMLDivElement>(null);
 
-    React.useEffect(() => {
-      // Dynamically import the QR scanner library
+    useEffect(() => {
       const initScanner = async () => {
         try {
           const { Html5QrcodeScanner } = await import('html5-qrcode');
@@ -289,6 +320,31 @@ const FileTransferApp: React.FC = () => {
           <div id="qr-reader" ref={qrRef} className="my-4"></div>
           <div className="modal-action">
             <button className="btn" onClick={() => setShowQRScanner(false)}>Close</button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const QRGeneratorModal = () => {
+    return (
+      <div className="modal modal-open">
+        <div className="modal-box">
+          <h3 className="font-bold text-lg">Scan to Download</h3>
+          <div className="flex flex-col items-center my-4">
+            {qrCodeDataUrl ? (
+              <img src={qrCodeDataUrl} alt="QR Code" className="w-64 h-64" />
+            ) : (
+              <div className="w-64 h-64 flex items-center justify-center">
+                <span className="loading loading-spinner loading-lg"></span>
+              </div>
+            )}
+            <p className="mt-4 text-sm text-center">
+              Scan this QR code to download the file
+            </p>
+          </div>
+          <div className="modal-action">
+            <button className="btn" onClick={() => setShowQRGenerator(false)}>Close</button>
           </div>
         </div>
       </div>
@@ -372,8 +428,14 @@ const FileTransferApp: React.FC = () => {
                       {copied ? 'Copied' : 'Copy'}
                     </button>
                   </div>
+                  <div className="flex justify-center gap-2">
+                    <button className="btn btn-outline" onClick={handleShowQRGenerator}>
+                      <QrCode className="h-4 w-4 mr-2" />
+                      Show QR Code
+                    </button>
+                    <button className="btn btn-outline" onClick={() => setUploadResult(null)}>Upload Another</button>
+                  </div>
                   <p className="text-sm">Expires: {new Date(uploadResult.expires_at).toLocaleTimeString()}</p>
-                  <button className="btn btn-outline" onClick={() => setUploadResult(null)}>Upload Another</button>
                 </div>
               )}
             </div>
@@ -420,6 +482,7 @@ const FileTransferApp: React.FC = () => {
         )}
 
         {showQRScanner && <QRScanner />}
+        {showQRGenerator && <QRGeneratorModal />}
 
         <p className="text-center text-xs text-base-content/50">Made For Testing Purposes Only. Be Careful Of What You Upload On The Internet. Nobody is actually safe in the Internet.</p>
       </div>
