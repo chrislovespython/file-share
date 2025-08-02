@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useRef } from 'react';
-import { Upload, AlertCircle, CheckCircle, ClipboardCopy } from 'lucide-react';
+import { Upload, AlertCircle, CheckCircle, ClipboardCopy, QrCode } from 'lucide-react';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'https://quickshare-backend-latest.onrender.com';
 
@@ -29,6 +29,7 @@ const FileTransferApp: React.FC = () => {
   const [dragOver, setDragOver] = useState(false);
   const [copied, setCopied] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [showQRScanner, setShowQRScanner] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
@@ -51,17 +52,14 @@ const FileTransferApp: React.FC = () => {
   const extractFilename = (contentDisposition: string | null): string => {
     if (!contentDisposition) return 'download';
     
-    // Try to extract filename from Content-Disposition header
-    // Format: attachment; filename="filename.ext" or attachment; filename=filename.ext
     const filenameRegex = /filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/;
     const match = contentDisposition.match(filenameRegex);
     
     if (match && match[1]) {
-      const filename = match[1].replace(/['"]/g, ''); // Remove quotes
+      const filename = match[1].replace(/['"]/g, '');
       return decodeURIComponent(filename) || 'download';
     }
     
-    // Fallback: try filename* (RFC 5987)
     const filenameStarRegex = /filename\*=UTF-8''([^;\n]*)/;
     const starMatch = contentDisposition.match(filenameStarRegex);
     
@@ -120,10 +118,8 @@ const FileTransferApp: React.FC = () => {
       const formData = new FormData();
       formData.append('file', uploadFile);
 
-      // Create XMLHttpRequest for progress tracking
       const xhr = new XMLHttpRequest();
       
-      // Promise wrapper for XMLHttpRequest
       const uploadPromise = new Promise<FileUploadResponse>((resolve, reject) => {
         xhr.upload.onprogress = (event) => {
           if (event.lengthComputable) {
@@ -207,10 +203,8 @@ const FileTransferApp: React.FC = () => {
       const blob = await response.blob();
       const contentDisposition = response.headers.get('content-disposition');
       
-      // Use the improved filename extraction
       let filename = extractFilename(contentDisposition);
       
-      // If we have file info, use that as fallback
       if (filename === 'download' && fileInfo?.original_name) {
         filename = fileInfo.original_name;
       }
@@ -240,6 +234,65 @@ const FileTransferApp: React.FC = () => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     }
+  };
+
+  const handleQRScan = (result: string) => {
+    if (result) {
+      // Extract code from URL if it's a full URL, or use the code directly
+      const urlMatch = result.match(/\/download\/([A-Z0-9]+)/i);
+      const code = urlMatch ? urlMatch[1] : result;
+      
+      setDownloadCode(code.toUpperCase());
+      setShowQRScanner(false);
+      fetchFileInfo(code);
+    }
+  };
+
+  const QRScanner = () => {
+    const qrRef = useRef<HTMLDivElement>(null);
+
+    React.useEffect(() => {
+      // Dynamically import the QR scanner library
+      const initScanner = async () => {
+        try {
+          const { Html5QrcodeScanner } = await import('html5-qrcode');
+          
+          const scanner = new Html5QrcodeScanner('qr-reader', {
+            qrbox: {
+              width: 250,
+              height: 250,
+            },
+            fps: 10,
+          }, false);
+
+          scanner.render(handleQRScan, (error: string) => {
+            console.error('QR Scanner error:', error);
+          });
+
+          return () => {
+            scanner.clear().catch(console.error);
+          };
+        } catch (err) {
+          console.error('Failed to load QR scanner:', err);
+          setError('Failed to load QR scanner');
+          setShowQRScanner(false);
+        }
+      };
+
+      initScanner();
+    }, []);
+
+    return (
+      <div className="modal modal-open">
+        <div className="modal-box">
+          <h3 className="font-bold text-lg">Scan QR Code</h3>
+          <div id="qr-reader" ref={qrRef} className="my-4"></div>
+          <div className="modal-action">
+            <button className="btn" onClick={() => setShowQRScanner(false)}>Close</button>
+          </div>
+        </div>
+      </div>
+    );
   };
 
   return (
@@ -330,13 +383,22 @@ const FileTransferApp: React.FC = () => {
         {activeTab === 'download' && (
           <div className="card bg-base-200">
             <div className="card-body space-y-4">
-              <input
-                type="text"
-                placeholder="Enter 6-char code"
-                className="input input-bordered w-full text-center font-mono uppercase"
-                value={downloadCode}
-                onChange={(e) => setDownloadCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6))}
-              />
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  placeholder="Enter 6-char code"
+                  className="input input-bordered w-full text-center font-mono uppercase"
+                  value={downloadCode}
+                  onChange={(e) => setDownloadCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8))}
+                />
+                <button 
+                  className="btn btn-outline" 
+                  onClick={() => setShowQRScanner(true)}
+                  title="Scan QR Code"
+                >
+                  <QrCode className="h-5 w-5" />
+                </button>
+              </div>
               <button className="btn btn-outline w-full" onClick={() => fetchFileInfo(downloadCode)} disabled={!downloadCode}>Check File</button>
 
               {fileInfo && (
@@ -356,6 +418,9 @@ const FileTransferApp: React.FC = () => {
             </div>
           </div>
         )}
+
+        {showQRScanner && <QRScanner />}
+
         <p className="text-center text-xs text-base-content/50">Made For Testing Purposes Only. Be Careful Of What You Upload On The Internet. Nobody is actually safe in the Internet.</p>
       </div>
     </div>
